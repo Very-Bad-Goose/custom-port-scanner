@@ -37,7 +37,10 @@ void scan_port(const std::string& ip_addr, int port)
     }
 
     u_long iMode = 1;
-    ioctlsocket(sock, FIONBIO, &iMode);
+    if (ioctlsocket(sock, FIONBIO, &iMode) != NO_ERROR) {
+        closesocket(sock);
+        return;
+    }
 
     int result = connect(sock, reinterpret_cast<sockaddr*>(&server), sizeof(server));
     if (result == SOCKET_ERROR) {
@@ -59,9 +62,11 @@ void scan_port(const std::string& ip_addr, int port)
         }
     }
 
-    std::lock_guard<std::mutex> lock(mutex);
-    ++num_open_ports;
-    open_ports.push_back(port);
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++num_open_ports;
+        open_ports.push_back(port);
+    }
 
     closesocket(sock);
 }
@@ -73,19 +78,20 @@ int main()
     std::cin >> ip_addr;
 
     std::vector<std::future<void>> tasks;
+    tasks.reserve(65535);
 
     for (int port = 1; port <= 65535; ++port) {
-        tasks.push_back(std::async(std::launch::async, scan_port, ip_addr, port));
+        tasks.emplace_back(std::async(std::launch::async, scan_port, ip_addr, port));
         if (tasks.size() >= MAX_THREADS) {
             for (auto& task : tasks) {
-                task.get();
+                task.wait();
             }
             tasks.clear();
         }
     }
 
     for (auto& task : tasks) {
-        task.get();
+        task.wait();
     }
 
     if (num_open_ports == 0) {
